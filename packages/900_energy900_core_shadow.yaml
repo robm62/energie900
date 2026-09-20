@@ -1,4 +1,4 @@
-# Energy900 core v0.1.0-shadow
+# Energy900 core v0.1.1-shadow
 # Read-only: no automations, scripts or physical service calls.
 # Zendure HEMS AUTO remains the physical battery controller.
 input_select:
@@ -53,9 +53,12 @@ template:
           {% elif age < -5 or age > 30 %}blocked_p1_stale
           {% elif not is_number(soc) or not (0 <= soc | float <= 100) %}blocked_soc_invalid
           {% elif not is_number(pv) or pv | float < 0 %}blocked_pv_invalid
+          {% elif as_timestamp(now()) - as_timestamp(states.sensor.solarflow_2400_ac_rob_electric_level.last_updated, 0) > 300 %}observing_hems_auto_soc_timestamp_old
+          {% elif as_timestamp(now()) - as_timestamp(states.sensor.kwh_meter_productievermogen.last_updated, 0) > 180 %}observing_hems_auto_pv_timestamp_old
+          {% elif as_timestamp(now()) - as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated, 0) > 30 %}observing_hems_auto_p1_power_timestamp_old
           {% else %}observing_hems_auto{% endif %}
         attributes:
-          version: v0.1.0-shadow
+          version: v0.1.1-shadow
           physical_write: false
           battery_writer_authorized: false
           easee_writer_authorized: false
@@ -75,6 +78,10 @@ template:
               as_timestamp(states.sensor.p1_meter_homewizard_energie_export.last_updated, 0)
             ] | max %}
             {{ (as_timestamp(now()) - ts) | round(1) if ts > 0 else -1 }}
+          p1_power_age_s: "{{ (as_timestamp(now()) - as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated, 0)) | round(1) }}"
+          pv_homewizard_age_s: "{{ (as_timestamp(now()) - as_timestamp(states.sensor.kwh_meter_productievermogen.last_updated, 0)) | round(1) }}"
+          battery_soc_age_s: "{{ (as_timestamp(now()) - as_timestamp(states.sensor.solarflow_2400_ac_rob_electric_level.last_updated, 0)) | round(1) }}"
+          freshness_note: timestamps_are_diagnostic_and_old_values_do_not_prove_device_failure
           pv_homewizard_w: "{{ states('sensor.kwh_meter_productievermogen') }}"
           battery_soc_pct: "{{ states('sensor.solarflow_2400_ac_rob_electric_level') }}"
           battery_output_home_w: "{{ states('sensor.solarflow_2400_ac_rob_output_home_power') }}"
