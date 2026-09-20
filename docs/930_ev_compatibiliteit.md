@@ -8,7 +8,7 @@
 | Override (ook geplande start en duur) | `510_ev_override_manager.yaml`, `timer.ev_laad_override`, `input_datetime.ev_override_geplande_start`, bestaande scripts | Bestaande bediening blijft werken; shadow observeert |
 | PV- en directe verzoeken | `635_ev_request_contract.yaml` (prioriteit safety 100, override 90, direct 70, PV 40) | Vergelijk nieuwe adviezen met bestaande verzoeken |
 | Fase-/stroomcap | `sensor.ev_netbalancer_safe_current`, 640-gateway, 920-faseobservatie | Nieuwe cap eerst onafhankelijk vergelijken |
-| Dynamisch goedkoop kwartierplan | `199bc_ev_exact_quarter_plan.yaml` en prijsbeleid | 930b apart; meerdere goedkope blokken en vertrekhaalbaarheid toetsen |
+| Dynamisch goedkoop kwartierplan | `199bc_ev_exact_quarter_plan.yaml` en prijsbeleid | 930b apart; thuis en aangesloten bij SOC <80% alle bekende goedkope blokken benutten tot 90%; vertrekurgentie en override apart toetsen |
 | Easee-opdracht | `660_ev_writer.yaml` en fasepad `639b_ev_phase_writer_candidate.yaml` | Geen fysieke opdracht in 930a/930b; later een writer |
 | EV-batterijinterlock | `639d_ev_battery_hard_interlock.yaml` en UI-automation | Ontladen tijdens werkelijk EV-laden in beide modi blokkeren; laden bij vast/variabel blokkeren, bij dynamisch Zendure laten beslissen. Fysieke werking nog te testen |
 
