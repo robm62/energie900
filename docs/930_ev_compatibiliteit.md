@@ -5,7 +5,7 @@
 | Functie | Bestaande bron / contract | Energie900-opbouw |
 |---|---|---|
 | Voertuig-SOC en vertrekdoel | `sensor.ev_actuele_voertuig_soc`, `input_number.ev_doel_soc`, route-/vertreksensoren op EV-dashboard | 930a/930b lezen bestaande invoer; geen dashboardwijziging in shadow |
-| Override (ook geplande start en duur) | `510_ev_override_manager.yaml`, `timer.ev_laad_override`, `input_datetime.ev_override_geplande_start`, bestaande scripts | Bestaande bediening blijft werken; 930a vast/variabel stelt uitsluitend laden via handmatige override voor, 930b bewaakt override als aparte prioriteit |
+| Override (ook geplande start en duur) | `510_ev_override_manager.yaml`, `timer.ev_laad_override`, `input_datetime.ev_override_geplande_start`, bestaande scripts | Bestaande bediening blijft werken; 930a vast/variabel stelt netladen via handmatige override en automatisch PV-laden voor; 930b bewaakt override, PV en goedkope blokken als aparte redenen |
 | PV- en directe verzoeken | `635_ev_request_contract.yaml` (prioriteit safety 100, override 90, direct 70, PV 40) | Vergelijk nieuwe adviezen met bestaande verzoeken |
 | Fase-/stroomcap | `sensor.ev_netbalancer_safe_current`, 640-gateway, 920-faseobservatie | Nieuwe cap eerst onafhankelijk vergelijken |
 | Dynamisch goedkoop kwartierplan | `199bc_ev_exact_quarter_plan.yaml` en prijsbeleid | 930b apart; thuis en aangesloten bij SOC <80% alle bekende goedkope blokken benutten tot 90%; vertrekurgentie en override apart toetsen |
