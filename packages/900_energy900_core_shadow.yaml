@@ -1,9 +1,9 @@
-# Energy900 core v0.1.1-shadow
+# Energy900 core v0.1.2-shadow
 # Read-only: no automations, scripts or physical service calls.
 # Zendure HEMS AUTO remains the physical battery controller.
 input_select:
   energy900_contract_mode:
-    name: Energy900 contractmodus
+    name: Energy900 rekenmodus (dashboard)
     options:
       - Vast/variabel
       - Dynamisch
@@ -48,7 +48,7 @@ template:
           {% set age = as_timestamp(now()) - ts if ts > 0 else 999999 %}
           {% if not is_state('binary_sensor.energy700_battery_hems_active', 'on') %}blocked_hems_not_active
           {% elif is_state('input_boolean.energy700_power_writer_enabled', 'on') %}blocked_legacy_power_writer_enabled
-          {% elif not is_state('input_select.energy900_contract_mode', 'Vast/variabel') %}blocked_mode_not_fixed
+          {% elif states('input_select.energy900_contract_mode') not in ['Vast/variabel', 'Dynamisch'] %}blocked_calculation_mode_invalid
           {% elif not is_number(p1) %}blocked_p1_invalid
           {% elif age < -5 or age > 30 %}blocked_p1_stale
           {% elif not is_number(soc) or not (0 <= soc | float <= 100) %}blocked_soc_invalid
@@ -58,11 +58,13 @@ template:
           {% elif as_timestamp(now()) - as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated, 0) > 30 %}observing_hems_auto_p1_power_timestamp_old
           {% else %}observing_hems_auto{% endif %}
         attributes:
-          version: v0.1.1-shadow
+          version: v0.1.2-shadow
           physical_write: false
           battery_writer_authorized: false
           easee_writer_authorized: false
-          selected_contract_mode: "{{ states('input_select.energy900_contract_mode') }}"
+          selected_calculation_mode: "{{ states('input_select.energy900_contract_mode') }}"
+          calculation_scope: dashboards_and_reports_only
+          physical_mode_switch: false
           zendure_contract_setting: manual_in_zendure_app_not_readable_here
           observed_hems_active: "{{ states('binary_sensor.energy700_battery_hems_active') }}"
           requested_legacy_owner: "{{ states('input_select.energy700_battery_owner_requested') }}"
