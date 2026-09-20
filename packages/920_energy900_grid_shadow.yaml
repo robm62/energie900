@@ -1,0 +1,87 @@
+# Energy900 grid v0.1.0-shadow
+# Read-only three-phase P1 observation. No EV or battery writes.
+# 20/22/24 A are diagnostic levels, not active charging limits.
+template:
+  - triggers:
+      - trigger: time_pattern
+        seconds: "/10"
+      - trigger: state
+        entity_id:
+          - sensor.p1_meter_stroom_fase_1
+          - sensor.p1_meter_homewizard_stroom_fase_2
+          - sensor.p1_meter_homewizard_stroom_fase_3
+          - sensor.p1_meter_homewizard_vermogen_fase_1
+          - sensor.p1_meter_homewizard_vermogen_fase_2
+          - sensor.p1_meter_homewizard_vermogen_fase_3
+          - sensor.p1_meter_spanning_fase_1
+          - sensor.p1_meter_homewizard_spanning_fase_2
+          - sensor.p1_meter_homewizard_spanning_fase_3
+          - sensor.p1_meter_homewizard_vermogen
+          - sensor.p1_meter_stroom
+    sensor:
+      - name: Energy900 Grid Shadow Status
+        unique_id: energy900_grid_shadow_status
+        icon: mdi:transmission-tower
+        state: >-
+          {% set ids = [
+            'sensor.p1_meter_stroom_fase_1',
+            'sensor.p1_meter_homewizard_stroom_fase_2',
+            'sensor.p1_meter_homewizard_stroom_fase_3'
+          ] %}
+          {% set values = ids | map('states') | list %}
+          {% set ts = [
+            as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_stroom.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_stroom_fase_1.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_homewizard_stroom_fase_2.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_homewizard_stroom_fase_3.last_updated, 0)
+          ] | max %}
+          {% set age = as_timestamp(now()) - ts if ts > 0 else 999999 %}
+          {% if values | select('is_number') | list | count != 3 %}phase_current_invalid
+          {% elif age < -5 or age > 30 %}p1_heartbeat_stale
+          {% else %}
+            {% set peak = values | map('float') | map('abs') | max %}
+            {% if peak >= 24 %}observed_at_or_above_24a
+            {% elif peak >= 22 %}observed_at_or_above_22a
+            {% elif peak >= 20 %}observed_at_or_above_20a
+            {% else %}observing_below_20a{% endif %}
+          {% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          operational_limit_enforced: false
+          direction_note: signed_phase_current_can_be_negative_during_export
+          warning_a: 20
+          proposed_operational_a: 22
+          critical_observation_a: 24
+          physical_fuse_a: 25
+          phase_1_current_a: "{{ states('sensor.p1_meter_stroom_fase_1') }}"
+          phase_2_current_a: "{{ states('sensor.p1_meter_homewizard_stroom_fase_2') }}"
+          phase_3_current_a: "{{ states('sensor.p1_meter_homewizard_stroom_fase_3') }}"
+          phase_1_absolute_a: "{{ states('sensor.p1_meter_stroom_fase_1') | float(0) | abs | round(3) }}"
+          phase_2_absolute_a: "{{ states('sensor.p1_meter_homewizard_stroom_fase_2') | float(0) | abs | round(3) }}"
+          phase_3_absolute_a: "{{ states('sensor.p1_meter_homewizard_stroom_fase_3') | float(0) | abs | round(3) }}"
+          peak_absolute_a: >-
+            {% set currents = [
+              states('sensor.p1_meter_stroom_fase_1'),
+              states('sensor.p1_meter_homewizard_stroom_fase_2'),
+              states('sensor.p1_meter_homewizard_stroom_fase_3')
+            ] %}
+            {{ (currents | map('float') | map('abs') | max) | round(3) if currents | select('is_number') | list | count == 3 else 'unknown' }}
+          margin_to_proposed_22a: >-
+            {% set currents = [
+              states('sensor.p1_meter_stroom_fase_1'),
+              states('sensor.p1_meter_homewizard_stroom_fase_2'),
+              states('sensor.p1_meter_homewizard_stroom_fase_3')
+            ] %}
+            {{ (22 - (currents | map('float') | map('abs') | max)) | round(3) if currents | select('is_number') | list | count == 3 else 'unknown' }}
+          phase_1_power_w: "{{ states('sensor.p1_meter_homewizard_vermogen_fase_1') }}"
+          phase_2_power_w: "{{ states('sensor.p1_meter_homewizard_vermogen_fase_2') }}"
+          phase_3_power_w: "{{ states('sensor.p1_meter_homewizard_vermogen_fase_3') }}"
+          phase_1_voltage_v: "{{ states('sensor.p1_meter_spanning_fase_1') }}"
+          phase_2_voltage_v: "{{ states('sensor.p1_meter_homewizard_spanning_fase_2') }}"
+          phase_3_voltage_v: "{{ states('sensor.p1_meter_homewizard_spanning_fase_3') }}"
+          phase_1_current_age_s: "{{ (as_timestamp(now()) - as_timestamp(states.sensor.p1_meter_stroom_fase_1.last_updated, 0)) | round(1) }}"
+          phase_2_current_age_s: "{{ (as_timestamp(now()) - as_timestamp(states.sensor.p1_meter_homewizard_stroom_fase_2.last_updated, 0)) | round(1) }}"
+          phase_3_current_age_s: "{{ (as_timestamp(now()) - as_timestamp(states.sensor.p1_meter_homewizard_stroom_fase_3.last_updated, 0)) | round(1) }}"
+          individual_age_note: unchanged_values_can_have_old_timestamps_even_with_fresh_p1_heartbeat
