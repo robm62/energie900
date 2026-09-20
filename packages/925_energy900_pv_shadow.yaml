@@ -1,0 +1,118 @@
+# Energy900 PV v0.1.0-shadow
+# One-phase EV PV request from measured P1, PV and EV power.
+# Shadow only: no automations, helpers or physical service calls.
+# Actual PV can understate available potential while the inverter is curtailed.
+template:
+  - binary_sensor:
+      - name: Energy900 PV Start Ready
+        unique_id: energy900_pv_start_ready
+        icon: mdi:solar-power
+        state: >-
+          {% set p1=states('sensor.p1_meter_homewizard_vermogen') %}
+          {% set pv=states('sensor.kwh_meter_productievermogen') %}
+          {% set v=states('sensor.p1_meter_spanning_fase_1') %}
+          {% set reserve=states('input_number.ev_pv_grid_reserve_w') %}
+          {% set ts=as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated,0) %}
+          {{ is_state('binary_sensor.ev_aangesloten','on')
+             and is_number(p1) and is_number(pv) and is_number(v)
+             and is_number(reserve) and 190 <= v|float <= 260
+             and as_timestamp(now())-ts <= 30
+             and as_timestamp(now())-ts >= -5
+             and pv|float >= 0
+             and -p1|float >= v|float*6+reserve|float }}
+        delay_on: "00:02:00"
+        delay_off: "00:00:05"
+        attributes:
+          physical_write: false
+          method: measured_p1_export_only
+          limitation: curtailed_pv_potential_not_measured
+
+      - name: Energy900 PV Sustained Shortage
+        unique_id: energy900_pv_sustained_shortage
+        icon: mdi:weather-cloudy
+        state: >-
+          {% set p1=states('sensor.p1_meter_homewizard_vermogen') %}
+          {% set pv=states('sensor.kwh_meter_productievermogen') %}
+          {% set limit=250 if is_state('input_select.energy900_contract_mode','Dynamisch') else 800 %}
+          {{ is_state('binary_sensor.ev_laden_actief','on')
+             and is_number(p1) and is_number(pv)
+             and pv|float < 1000 and p1|float >= limit }}
+        delay_on: "00:10:00"
+        delay_off: "00:03:00"
+        attributes:
+          physical_write: false
+          import_limit_w: "{{ 250 if is_state('input_select.energy900_contract_mode','Dynamisch') else 800 }}"
+          qualification_seconds: 600
+          recovery_seconds: 180
+
+  - triggers:
+      - trigger: time_pattern
+        seconds: "/10"
+      - trigger: state
+        entity_id:
+          - binary_sensor.energy900_pv_start_ready
+          - binary_sensor.energy900_pv_sustained_shortage
+          - sensor.p1_meter_homewizard_vermogen
+          - sensor.kwh_meter_productievermogen
+          - sensor.p1_meter_spanning_fase_1
+          - sensor.ev_laadvermogen
+          - sensor.ev_laadstroom
+          - sensor.ev600_gateway_selected_current
+          - input_number.ev_pv_grid_reserve_w
+          - input_number.ev_maximale_laadstroom_tijdelijk
+          - binary_sensor.ev_aangesloten
+    sensor:
+      - name: Energy900 PV Shadow Request
+        unique_id: energy900_pv_shadow_request
+        unit_of_measurement: A
+        device_class: current
+        icon: mdi:solar-power
+        state: >-
+          {% set p1=states('sensor.p1_meter_homewizard_vermogen') %}
+          {% set pv=states('sensor.kwh_meter_productievermogen') %}
+          {% set v=states('sensor.p1_meter_spanning_fase_1') %}
+          {% set ev=states('sensor.ev_laadvermogen') %}
+          {% set actual=states('sensor.ev_laadstroom') %}
+          {% set reserve=states('input_number.ev_pv_grid_reserve_w') %}
+          {% set maximum=states('input_number.ev_maximale_laadstroom_tijdelijk') %}
+          {% set ts=as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated,0) %}
+          {% if not is_state('binary_sensor.ev_aangesloten','on')
+            or is_state('binary_sensor.energy900_pv_sustained_shortage','on')
+            or not is_number(p1) or not is_number(pv) or not is_number(v)
+            or not is_number(ev) or not is_number(actual)
+            or not is_number(reserve) or not is_number(maximum)
+            or not 190 <= v|float <= 260 or pv|float < 0
+            or as_timestamp(now())-ts > 30 or as_timestamp(now())-ts < -5 %}
+            0
+          {% else %}
+            {% set limit=[maximum|int(0),16]|min %}
+            {% set confirmed=actual|float>=5.25 or ev|float>=v|float*6*0.8 %}
+            {% set previous=states('sensor.ev600_gateway_selected_current')|float(0) %}
+            {% set import_limit=250 if is_state('input_select.energy900_contract_mode','Dynamisch') else 800 %}
+            {% set net=[ev|float-p1|float-reserve|float,0]|max %}
+            {% if limit<6 %}0
+            {% elif not confirmed %}
+              {{ 6 if (is_state('binary_sensor.energy900_pv_start_ready','on') and
+                (net>=v|float*6 or
+                (is_state('input_select.energy900_contract_mode','Vast/variabel') and p1|float<import_limit)))
+                or (previous>=6 and p1|float<import_limit) else 0 }}
+            {% else %}
+              {% set base=[[actual|float,6]|max,limit]|min %}
+              {% set error=-p1|float-reserve|float %}
+              {% set correction=0 if error|abs<=100 else error/v|float %}
+              {% set limited=[[base+correction,base-4]|max,base+2]|min %}
+              {{ [[limited,6]|max,limit]|min|round(0,'floor')|int }}
+            {% endif %}
+          {% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          phase: 1
+          reserve_w: "{{ states('input_number.ev_pv_grid_reserve_w') }}"
+          measured_pv_w: "{{ states('sensor.kwh_meter_productievermogen') }}"
+          measured_grid_w: "{{ states('sensor.p1_meter_homewizard_vermogen') }}"
+          start_ready: "{{ states('binary_sensor.energy900_pv_start_ready') }}"
+          sustained_shortage: "{{ states('binary_sensor.energy900_pv_sustained_shortage') }}"
+          old_request_a: "{{ states('sensor.ev600_request_pv_current') }}"
+          old_potential_w: "{{ states('sensor.growatt_ev_pv_potentieel_op_100_procent') }}"
+          limitation: measured_pv_may_underestimate_curtailed_potential
