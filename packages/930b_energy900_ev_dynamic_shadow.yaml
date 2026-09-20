@@ -1,0 +1,151 @@
+# Energy900 EV dynamic v0.1.0-shadow
+# Multi-slot all-in price plan and charge proposal, no physical service calls.
+# Existing EV departure and energy-need inputs are read for compatibility.
+template:
+  - sensor:
+      - name: Energy900 EV Dynamic Shadow Plan
+        unique_id: energy900_ev_dynamic_shadow_plan
+        icon: mdi:calendar-clock
+        state: >-
+          {% set dep = as_timestamp(states('sensor.ev_effectief_vertrekmoment'),0) %}
+          {% set needed = states('sensor.ev_benodigde_goedkope_kwartieren') | int(0) %}
+          {% set src = states('input_text.dynamic_price_market_source_entity') %}
+          {% set slots = (state_attr(src,'raw_today') | default([],true)) + (state_attr(src,'raw_tomorrow') | default([],true)) %}
+          {% set ns = namespace(count=0,last=0) %}
+          {% for slot in slots %}
+            {% set start = as_timestamp(slot.start,0) %}
+            {% set stop = as_timestamp(slot.end,0) %}
+            {% if stop > as_timestamp(now()) and start < dep and is_number(slot.value) %}
+              {% set ns.count = ns.count + 1 %}
+              {% set ns.last = [ns.last,stop] | max %}
+            {% endif %}
+          {% endfor %}
+          {% if dep <= as_timestamp(now()) %}no_valid_departure
+          {% elif needed <= 0 %}no_grid_slots_needed
+          {% elif not is_state('binary_sensor.dynamic_price_contract_canonical_healthy','on')
+            or not is_number(states('input_number.dynamic_contract_vat_factor'))
+            or not is_number(states('input_number.dynamic_contract_energy_tax'))
+            or not is_number(states('input_number.dynamic_contract_import_supplier_fee')) %}price_components_invalid
+          {% elif ns.count < needed or ns.last < dep %}incomplete_price_horizon
+          {% else %}candidate_{{ needed }}_cheap_slots{% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          price_basis: marginal_all_in_eur_per_kwh
+          departure: "{{ states('sensor.ev_effectief_vertrekmoment') }}"
+          needed_quarters: "{{ states('sensor.ev_benodigde_goedkope_kwartieren') }}"
+          price_source: "{{ states('input_text.dynamic_price_market_source_entity') }}"
+          current_quarter_may_be_partial: true
+          selected_blocks: >-
+            {% set dep = as_timestamp(states('sensor.ev_effectief_vertrekmoment'),0) %}
+            {% set needed = states('sensor.ev_benodigde_goedkope_kwartieren') | int(0) %}
+            {% set src = states('input_text.dynamic_price_market_source_entity') %}
+            {% set slots = (state_attr(src,'raw_today') | default([],true)) + (state_attr(src,'raw_tomorrow') | default([],true)) %}
+            {% set vat = states('input_number.dynamic_contract_vat_factor') | float(0) %}
+            {% set tax = states('input_number.dynamic_contract_energy_tax') | float(0) %}
+            {% set fee = states('input_number.dynamic_contract_import_supplier_fee') | float(0) %}
+            {% set ns = namespace(items=[]) %}
+            {% if dep > as_timestamp(now()) and needed > 0
+              and is_state('binary_sensor.dynamic_price_contract_canonical_healthy','on')
+              and is_number(states('input_number.dynamic_contract_vat_factor'))
+              and is_number(states('input_number.dynamic_contract_energy_tax'))
+              and is_number(states('input_number.dynamic_contract_import_supplier_fee')) %}
+              {% for slot in slots %}
+                {% set start = as_timestamp(slot.start,0) %}
+                {% set stop = as_timestamp(slot.end,0) %}
+                {% if stop > as_timestamp(now()) and start < dep and is_number(slot.value) %}
+                  {% set price = (slot.value | float * vat + tax + fee) | round(5) %}
+                  {% set ns.items = ns.items + [dict(start=slot.start.isoformat(),end=slot.end.isoformat(),price_eur_kwh=price,price=price)] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ((ns.items | sort(attribute='start') | list) if needed <= 0 else
+                (ns.items | sort(attribute='price') | list)[:needed] | sort(attribute='start') | list) | to_json }}
+          selected_count: >-
+            {% set dep = as_timestamp(states('sensor.ev_effectief_vertrekmoment'),0) %}
+            {% set needed = states('sensor.ev_benodigde_goedkope_kwartieren') | int(0) %}
+            {% set src = states('input_text.dynamic_price_market_source_entity') %}
+            {% set slots = (state_attr(src,'raw_today') | default([],true)) + (state_attr(src,'raw_tomorrow') | default([],true)) %}
+            {% set ns = namespace(count=0) %}
+            {% for slot in slots %}
+              {% if as_timestamp(slot.end,0) > as_timestamp(now())
+                and as_timestamp(slot.start,0) < dep and is_number(slot.value) %}
+                {% set ns.count = ns.count + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ [needed,ns.count] | min if dep > as_timestamp(now()) and needed > 0 else 0 }}
+          feasibility_note: selected_quarters_are_provisional_until_full_horizon_and_partial_current_energy_checked
+
+      - name: Energy900 EV Dynamic Shadow Proposal
+        unique_id: energy900_ev_dynamic_shadow_proposal
+        unit_of_measurement: A
+        device_class: current
+        state: >-
+          {% set soc = states('sensor.ev_actuele_voertuig_soc') %}
+          {% set cap = states('sensor.ev_netbalancer_safe_current') %}
+          {% set maximum = states('input_number.ev_maximale_laadstroom_tijdelijk') %}
+          {% set phase = states('sensor.energy900_grid_shadow_status') %}
+          {% set plan = states('sensor.energy900_ev_dynamic_shadow_plan') %}
+          {% set now_ts = as_timestamp(now()) %}
+          {% set raw_blocks = state_attr('sensor.energy900_ev_dynamic_shadow_plan','selected_blocks') %}
+          {% set blocks = raw_blocks if raw_blocks is sequence and raw_blocks is not string else raw_blocks | from_json([]) %}
+          {% set ns = namespace(selected=false) %}
+          {% for block in blocks %}
+            {% if plan.startswith('candidate_') and as_timestamp(block.start,0) <= now_ts < as_timestamp(block.end,0) %}
+              {% set ns.selected = true %}
+            {% endif %}
+          {% endfor %}
+          {% if not is_state('binary_sensor.ev_aangesloten','on')
+            or not is_number(soc) or soc | float >= 100
+            or not is_number(cap) or not is_number(maximum)
+            or phase in ['unknown','unavailable','phase_current_invalid','p1_heartbeat_stale'] %}
+            0
+          {% else %}
+            {% set limit = [cap | int(0),maximum | int(0),16] | min %}
+            {% set override = is_state('timer.ev_laad_override','active') %}
+            {% set urgent = states('sensor.ev_beslis_engine_v2_laadmodus') in ['URGENT','NOW'] %}
+            {% set partial_cheap = plan == 'incomplete_price_horizon'
+              and is_state('binary_sensor.dynamic_price_contract_canonical_healthy','on')
+              and is_number(states('sensor.dynamic_contract_import_price_now'))
+              and is_number(states('input_number.ev_dynamisch_goedkoop_max_eur_kwh'))
+              and states('sensor.dynamic_contract_import_price_now') | float <= states('input_number.ev_dynamisch_goedkoop_max_eur_kwh') | float %}
+            {% set pv = is_state('sensor.ev_beslis_engine_v2_laadmodus','PV_FIRST')
+              and is_state('input_boolean.ev600_pv_shortage_block','off') %}
+            {% set req = states('input_number.ev_override_laadstroom_a') | int(0) if override
+              else maximum | int(0) if urgent or ns.selected or partial_cheap
+              else states('sensor.ev600_pv_linear_request') | int(0) if pv else 0 %}
+            {{ [req,limit] | min if req >= 6 and limit >= 6 else 0 }}
+          {% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          calculation_policy: dynamic_ev
+          battery_policy_during_ev_charge: no_discharge_zendure_controls_charge
+          price_plan: "{{ states('sensor.energy900_ev_dynamic_shadow_plan') }}"
+          dynamic_import_price_now: "{{ states('sensor.dynamic_contract_import_price_now') }}"
+          current_slot_opportunistic_only_if_partial_horizon: true
+          selected_blocks: "{{ state_attr('sensor.energy900_ev_dynamic_shadow_plan','selected_blocks') }}"
+          existing_gateway_a: "{{ states('sensor.ev600_gateway_selected_current') }}"
+          existing_gateway_source: "{{ states('sensor.ev600_gateway_selected_source') }}"
+          physical_ev_charging: >-
+            {{ is_state('sensor.euj3mext_status','charging')
+              or states('sensor.euj3mext_vermogen') | float(0) > 1 }}
+          observed_battery_discharge_w: "{{ states('sensor.battery_discharge_power') }}"
+          discharge_warning: >-
+            {{ (is_state('sensor.euj3mext_status','charging')
+              or states('sensor.euj3mext_vermogen') | float(0) > 1)
+              and states('sensor.battery_discharge_power') | float(0) > 50 }}
+
+      - name: Energy900 EV Dynamic Shadow Comparison
+        unique_id: energy900_ev_dynamic_shadow_comparison
+        state: >-
+          {% set legacy = states('sensor.ev600_gateway_selected_current') %}
+          {% set candidate = states('sensor.energy900_ev_dynamic_shadow_proposal') %}
+          {% if not is_number(legacy) or not is_number(candidate) %}invalid
+          {% elif (legacy | float - candidate | float) | abs <= 0.5 %}match
+          {% else %}different{% endif %}
+        attributes:
+          physical_write: false
+          candidate_a: "{{ states('sensor.energy900_ev_dynamic_shadow_proposal') }}"
+          existing_gateway_a: "{{ states('sensor.ev600_gateway_selected_current') }}"
+          existing_gateway_source: "{{ states('sensor.ev600_gateway_selected_source') }}"
