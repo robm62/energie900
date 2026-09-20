@@ -1,0 +1,126 @@
+# Energy900 Growatt/EV v0.1.0-shadow
+# Independent forecast potential and EV window diagnostics.
+# No helper writes, automations, scripts or physical Growatt commands.
+# Prestart candidate is not an executable limiter command: 15-minute
+# timeout and verified bridge ownership still require a dedicated policy.
+template:
+  - sensor:
+      - name: Energy900 Growatt PV Potential Shadow
+        unique_id: energy900_growatt_pv_potential_shadow
+        unit_of_measurement: W
+        device_class: power
+        icon: mdi:solar-power-variant
+        state: >-
+          {% set forecast=states('sensor.growatt_realtime_best_model_power') %}
+          {% set learned=states('input_number.growatt_ratio_pv_avg_100') %}
+          {% set samples=states('input_number.growatt_ratio_scan_count_100') %}
+          {% set quality=states('sensor.growatt_ratio_bucket_100_quality_score') %}
+          {% set weight=states('input_number.growatt_ev_learning_forecast_weight_pct') %}
+          {% set physical=states('input_number.growatt_pv_physical_max_w') %}
+          {% if not is_number(physical) or not is_number(weight)
+            or not 0<=weight|float<=100
+            or not is_number(forecast) or not is_number(learned)
+            or not is_number(samples) or not is_number(quality) %}
+            {{ states('sensor.kwh_meter_productievermogen')|float(0)|round(0) }}
+          {% else %}
+            {% set usable=samples|float>=5 and learned|float>0 and quality|float>=50 %}
+            {% set raw=forecast|float*weight|float/100+learned|float*(1-weight|float/100)
+              if forecast|float>0 and usable else
+              forecast|float if forecast|float>0 else learned|float if usable else 0 %}
+            {{ [[raw,states('sensor.kwh_meter_productievermogen')|float(0)]|max,
+              physical|float]|min|round(0) }}
+          {% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          old_potential_w: "{{ states('sensor.growatt_ev_pv_potentieel_op_100_procent') }}"
+          measured_pv_w: "{{ states('sensor.kwh_meter_productievermogen') }}"
+          method: forecast_and_learned_100_with_measured_floor_and_physical_cap
+
+      - name: Energy900 Growatt EV Surplus Shadow
+        unique_id: energy900_growatt_ev_surplus_shadow
+        unit_of_measurement: W
+        device_class: power
+        state: >-
+          {% set pv=states('sensor.kwh_meter_productievermogen') %}
+          {% set p1=states('sensor.p1_meter_homewizard_vermogen') %}
+          {% set discharge=states('sensor.battery_discharge_power') %}
+          {% set charge=states('sensor.battery_charge_power') %}
+          {% set ev=states('sensor.ev_laadvermogen') %}
+          {% set potential=states('sensor.energy900_growatt_pv_potential_shadow') %}
+          {% if not is_number(pv) or not is_number(p1) or not is_number(discharge)
+            or not is_number(charge) or not is_number(ev) or not is_number(potential) %}
+            0
+          {% else %}
+            {% set house=[pv|float+p1|float+discharge|float-charge|float-ev|float,0]|max %}
+            {{ [potential|float-house,0]|max|round(0) }}
+          {% endif %}
+        attributes:
+          physical_write: false
+          old_surplus_w: "{{ states('sensor.growatt_ev_verwacht_laadbaar_overschot') }}"
+          limitation: battery_power_and_ev_power_are_existing_measurement_wrappers
+
+  - binary_sensor:
+      - name: Energy900 Growatt EV Prestart Shadow
+        unique_id: energy900_growatt_ev_prestart_shadow
+        state: >-
+          {% set surplus=states('sensor.energy900_growatt_ev_surplus_shadow') %}
+          {% set soc=states('sensor.solarflow_2400_ac_rob_electric_level') %}
+          {% set ready=states('input_number.ev_pv_battery_ready_soc') %}
+          {% set ev_soc=states('sensor.ev_actuele_voertuig_soc') %}
+          {% set target=states('sensor.ev_centrale_doel_soc') %}
+          {% set voltage=states('sensor.p1_meter_spanning_fase_1') %}
+          {% set reserve=states('input_number.ev_pv_grid_reserve_w') %}
+          {% set open_w=states('input_number.growatt_ev_venster_open_w') %}
+          {% set confidence=states('sensor.growatt_ev_pv_potentieel_confidence') %}
+          {% set minimum=states('input_number.growatt_ev_learning_min_confidence_pct') %}
+          {{ is_state('binary_sensor.ev_aangesloten','on')
+             and not is_state('binary_sensor.ev_laden_actief','on')
+             and is_number(surplus) and is_number(soc) and is_number(ready)
+             and is_number(ev_soc) and is_number(target)
+             and is_number(voltage) and is_number(reserve)
+             and is_number(open_w) and is_number(confidence) and is_number(minimum)
+             and 190<=voltage|float<=260
+             and soc|float>=ready|float and ev_soc|float<target|float
+             and confidence|float>=minimum|float
+             and surplus|float >= [open_w|float,voltage|float*6+reserve|float]|max }}
+        delay_on: "00:03:00"
+        delay_off: "00:10:00"
+        attributes:
+          physical_write: false
+          old_window: "{{ states('binary_sensor.growatt_ev_prognose_laadvenster') }}"
+          confidence_source: legacy_diagnostic_pending_independent_900_confidence
+          safety_limit: prestart_timer_15min_not_yet_implemented
+          proposal_only: true
+
+  - sensor:
+      - name: Energy900 Growatt Limiter Shadow
+        unique_id: energy900_growatt_limiter_shadow
+        icon: mdi:solar-power-variant
+        state: >-
+          {% if is_state('binary_sensor.ev_laden_actief','on')
+             or states('sensor.ev_laadvermogen')|float(0)>=300 %}ev_active_100
+          {% elif is_state('binary_sensor.energy900_growatt_ev_prestart_shadow','on') %}
+            prestart_candidate_unbounded
+          {% else %}normal_limiter_unchanged{% endif %}
+        attributes:
+          physical_write: false
+          executable_target_pct: >-
+            {{ 100 if is_state('binary_sensor.ev_laden_actief','on')
+               or states('sensor.ev_laadvermogen')|float(0)>=300 else 'none' }}
+          prestart_candidate_requires_timeout_guard: true
+          old_mode: "{{ states('sensor.growatt_limiter_regelmodus') }}"
+          old_floor_pct: "{{ states('sensor.growatt_ev_limiter_floor_percent') }}"
+          actual_last_written_pct: "{{ states('input_number.growatt_zomer_limiter_last_percent') }}"
+          runtime_floor_pct: "{{ states('input_number.growatt_dynamic_runtime_min_limit_pct') }}"
+          comparison: >-
+            {% set old=states('sensor.growatt_limiter_regelmodus') %}
+            {% set active=is_state('binary_sensor.ev_laden_actief','on')
+              or states('sensor.ev_laadvermogen')|float(0)>=300 %}
+            {% set candidate=is_state('binary_sensor.energy900_growatt_ev_prestart_shadow','on') %}
+            {% if old in ['unknown','unavailable'] %}old_invalid
+            {% elif active and old=='EV_LADEN' %}match_active
+            {% elif candidate and old=='EV_VENSTER' %}match_prestart
+            {% elif not active and not candidate and old=='NORMAAL' %}match_normal
+            {% else %}different_inspect_guards{% endif %}
+          limitation: existing_summer_limiter_policy_retains_physical_ownership
