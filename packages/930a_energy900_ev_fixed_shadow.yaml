@@ -1,4 +1,4 @@
-# Energy900 EV fixed/variable v0.1.0-shadow
+# Energy900 EV fixed/variable v0.1.1-shadow
 # Computes a candidate current and compares with the existing gateway.
 # No automations, scripts, Zendure or Easee service calls.
 # Legacy decision-mode inputs are temporary comparison sources; later versions
@@ -46,21 +46,15 @@ template:
             0
           {% else %}
             {% set limit = [cap | int(0), maximum | int(0), 16] | min %}
-            {% if is_state('timer.ev_laad_override','active') %}
-              {% set req = states('input_number.ev_override_laadstroom_a') | int(0) %}
-            {% elif mode in ['URGENT','NOW'] %}
-              {% set req = maximum | int(0) %}
-            {% elif mode == 'PV_FIRST' and is_state('input_boolean.ev600_pv_shortage_block','off') %}
-              {% set req = states('sensor.ev600_pv_linear_request') | int(0) %}
-            {% else %}
-              {% set req = 0 %}
-            {% endif %}
+            {% set req = states('input_number.ev_override_laadstroom_a') | int(0)
+              if is_state('timer.ev_laad_override','active') else 0 %}
             {{ [req,limit] | min if req >= 6 and limit >= 6 else 0 }}
           {% endif %}
         attributes:
-          version: v0.1.0-shadow
+          version: v0.1.1-shadow
           physical_write: false
-          calculation_policy: fixed_variable_ev
+          calculation_policy: fixed_variable_manual_override_only
+          automatic_fixed_start: false
           dynamic_cheap_grid_requests_allowed: false
           calculation_mode_helper_used_for_physical_selection: false
           reason: >-
@@ -72,9 +66,7 @@ template:
             {% elif not is_number(states('sensor.ev_netbalancer_safe_current')) %}netbalancer_cap_invalid
             {% elif states('sensor.energy900_grid_shadow_status') in ['p1_heartbeat_stale','phase_current_invalid','unknown','unavailable'] %}phase_data_invalid
             {% elif is_state('timer.ev_laad_override','active') %}manual_override
-            {% elif mode in ['URGENT','NOW'] %}departure_or_direct_need
-            {% elif mode == 'PV_FIRST' and is_state('input_boolean.ev600_pv_shortage_block','off') %}pv_request
-            {% else %}no_fixed_contract_charge_request{% endif %}
+            {% else %}waiting_for_manual_override{% endif %}
           source_mode: "{{ states('sensor.ev_beslis_engine_v2_laadmodus') }}"
           override_active: "{{ is_state('timer.ev_laad_override','active') }}"
           connected: "{{ states('binary_sensor.ev_aangesloten') }}"
