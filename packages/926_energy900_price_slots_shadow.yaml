@@ -1,0 +1,70 @@
+# Energy900 price slots v0.1.0-shadow
+# Nord Pool 15-minute slots; all-in threshold for EV cheap top-up.
+# No price-based physical control or service calls.
+template:
+  - triggers:
+      - trigger: time_pattern
+        minutes: "/1"
+      - trigger: state
+        entity_id:
+          - input_text.dynamic_price_market_source_entity
+          - binary_sensor.dynamic_price_contract_canonical_healthy
+          - input_number.dynamic_contract_vat_factor
+          - input_number.dynamic_contract_energy_tax
+          - input_number.dynamic_contract_import_supplier_fee
+          - input_number.ev_dynamisch_goedkoop_max_eur_kwh
+    sensor:
+      - name: Energy900 EV Cheap Slot Shadow
+        unique_id: energy900_ev_cheap_slot_shadow
+        icon: mdi:currency-eur
+        state: >-
+          {% set source=states('input_text.dynamic_price_market_source_entity') %}
+          {% set slots=(state_attr(source,'raw_today')|default([],true))
+             +(state_attr(source,'raw_tomorrow')|default([],true)) %}
+          {% set vat=states('input_number.dynamic_contract_vat_factor') %}
+          {% set tax=states('input_number.dynamic_contract_energy_tax') %}
+          {% set fee=states('input_number.dynamic_contract_import_supplier_fee') %}
+          {% set ceiling=states('input_number.ev_dynamisch_goedkoop_max_eur_kwh') %}
+          {% set ns=namespace(found=false) %}
+          {% for s in slots %}
+            {% if is_number(s.value) and as_timestamp(s.start,0)<=as_timestamp(now())
+              <as_timestamp(s.end,0)
+              and is_number(vat) and is_number(tax) and is_number(fee)
+              and is_number(ceiling)
+              and s.value|float*vat|float+tax|float+fee|float<=ceiling|float %}
+              {% set ns.found=true %}
+            {% endif %}
+          {% endfor %}
+          {% if not is_state('binary_sensor.dynamic_price_contract_canonical_healthy','on')
+            or not is_number(vat) or not is_number(tax) or not is_number(fee)
+            or not is_number(ceiling) or slots|length==0 %}invalid
+          {% elif ns.found %}cheap
+          {% else %}expensive_or_unknown{% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          source_entity: "{{ states('input_text.dynamic_price_market_source_entity') }}"
+          price_ceiling_eur_kwh: "{{ states('input_number.ev_dynamisch_goedkoop_max_eur_kwh') }}"
+          all_in_formula: market_times_vat_plus_tax_plus_fee
+          upcoming_cheap_slots: >-
+            {% set source=states('input_text.dynamic_price_market_source_entity') %}
+            {% set slots=(state_attr(source,'raw_today')|default([],true))
+              +(state_attr(source,'raw_tomorrow')|default([],true)) %}
+            {% set vat=states('input_number.dynamic_contract_vat_factor') %}
+            {% set tax=states('input_number.dynamic_contract_energy_tax') %}
+            {% set fee=states('input_number.dynamic_contract_import_supplier_fee') %}
+            {% set ceiling=states('input_number.ev_dynamisch_goedkoop_max_eur_kwh') %}
+            {% set ns=namespace(items=[]) %}
+            {% if is_state('binary_sensor.dynamic_price_contract_canonical_healthy','on')
+              and is_number(vat) and is_number(tax) and is_number(fee)
+              and is_number(ceiling) %}
+              {% for s in slots %}
+                {% if is_number(s.value) and as_timestamp(s.end,0)>as_timestamp(now())
+                  and s.value|float*vat|float+tax|float+fee|float<=ceiling|float %}
+                  {% set ns.items=ns.items+[dict(start=s.start|string,end=s.end|string,
+                    price_eur_kwh=(s.value|float*vat|float+tax|float+fee|float)|round(5))] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ (ns.items|sort(attribute='start')|list)|to_json }}
+          limitation: no_future_slots_when_nordpool_tomorrow_unavailable
