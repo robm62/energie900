@@ -1,0 +1,122 @@
+# Energy900 EV fixed/variable v0.1.0-shadow
+# Computes a candidate current and compares with the existing gateway.
+# No automations, scripts, Zendure or Easee service calls.
+# Legacy decision-mode inputs are temporary comparison sources; later versions
+# will calculate departure/PV intent independently after scenario validation.
+template:
+  - triggers:
+      - trigger: time_pattern
+        seconds: "/10"
+      - trigger: state
+        entity_id:
+          - binary_sensor.ev_aangesloten
+          - binary_sensor.ev_beslis_engine_v2_probleem
+          - sensor.ev_actuele_voertuig_soc
+          - sensor.ev_beslis_engine_v2_laadmodus
+          - sensor.ev600_pv_linear_request
+          - input_boolean.ev600_pv_shortage_block
+          - timer.ev_laad_override
+          - input_number.ev_override_laadstroom_a
+          - input_number.ev_maximale_laadstroom_tijdelijk
+          - sensor.ev_netbalancer_safe_current
+          - sensor.energy900_grid_shadow_status
+          - sensor.ev600_gateway_selected_current
+          - sensor.ev600_gateway_selected_source
+          - sensor.euj3mext_status
+          - sensor.euj3mext_vermogen
+          - sensor.battery_discharge_power
+          - sensor.battery_charge_power
+    sensor:
+      - name: Energy900 EV Fixed Shadow Proposal
+        unique_id: energy900_ev_fixed_shadow_proposal
+        unit_of_measurement: A
+        device_class: current
+        icon: mdi:car-electric-outline
+        state: >-
+          {% set soc = states('sensor.ev_actuele_voertuig_soc') %}
+          {% set cap = states('sensor.ev_netbalancer_safe_current') %}
+          {% set maximum = states('input_number.ev_maximale_laadstroom_tijdelijk') %}
+          {% set phase = states('sensor.energy900_grid_shadow_status') %}
+          {% set mode = states('sensor.ev_beslis_engine_v2_laadmodus') %}
+          {% if not is_state('binary_sensor.ev_aangesloten','on')
+             or not is_state('binary_sensor.ev_beslis_engine_v2_probleem','off')
+             or not is_number(soc) or soc | float >= 100
+             or not is_number(cap) or not is_number(maximum)
+             or phase not in ['observing_below_20a','observed_at_or_above_20a','observed_at_or_above_22a','observed_at_or_above_24a'] %}
+            0
+          {% else %}
+            {% set limit = [cap | int(0), maximum | int(0), 16] | min %}
+            {% if is_state('timer.ev_laad_override','active') %}
+              {% set req = states('input_number.ev_override_laadstroom_a') | int(0) %}
+            {% elif mode in ['URGENT','NOW'] %}
+              {% set req = maximum | int(0) %}
+            {% elif mode == 'PV_FIRST' and is_state('input_boolean.ev600_pv_shortage_block','off') %}
+              {% set req = states('sensor.ev600_pv_linear_request') | int(0) %}
+            {% else %}
+              {% set req = 0 %}
+            {% endif %}
+            {{ [req,limit] | min if req >= 6 and limit >= 6 else 0 }}
+          {% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          calculation_policy: fixed_variable_ev
+          dynamic_cheap_grid_requests_allowed: false
+          calculation_mode_helper_used_for_physical_selection: false
+          reason: >-
+            {% set mode = states('sensor.ev_beslis_engine_v2_laadmodus') %}
+            {% if not is_state('binary_sensor.ev_aangesloten','on') %}ev_not_connected
+            {% elif not is_state('binary_sensor.ev_beslis_engine_v2_probleem','off') %}legacy_decision_problem
+            {% elif not is_number(states('sensor.ev_actuele_voertuig_soc')) %}ev_soc_invalid
+            {% elif states('sensor.ev_actuele_voertuig_soc') | float >= 100 %}ev_full
+            {% elif not is_number(states('sensor.ev_netbalancer_safe_current')) %}netbalancer_cap_invalid
+            {% elif states('sensor.energy900_grid_shadow_status') in ['p1_heartbeat_stale','phase_current_invalid','unknown','unavailable'] %}phase_data_invalid
+            {% elif is_state('timer.ev_laad_override','active') %}manual_override
+            {% elif mode in ['URGENT','NOW'] %}departure_or_direct_need
+            {% elif mode == 'PV_FIRST' and is_state('input_boolean.ev600_pv_shortage_block','off') %}pv_request
+            {% else %}no_fixed_contract_charge_request{% endif %}
+          source_mode: "{{ states('sensor.ev_beslis_engine_v2_laadmodus') }}"
+          override_active: "{{ is_state('timer.ev_laad_override','active') }}"
+          connected: "{{ states('binary_sensor.ev_aangesloten') }}"
+          netbalancer_cap_a: "{{ states('sensor.ev_netbalancer_safe_current') }}"
+          phase_observation: "{{ states('sensor.energy900_grid_shadow_status') }}"
+          battery_policy_during_physical_ev_charge: no_discharge_no_charge
+          physical_ev_charging: >-
+            {{ is_state('sensor.euj3mext_status','charging')
+               or states('sensor.euj3mext_vermogen') | float(0) > 1 }}
+          observed_battery_discharge_w: "{{ states('sensor.battery_discharge_power') }}"
+          observed_battery_charge_w: "{{ states('sensor.battery_charge_power') }}"
+          observed_battery_policy_warning: >-
+            {% set ev = is_state('sensor.euj3mext_status','charging')
+               or states('sensor.euj3mext_vermogen') | float(0) > 1 %}
+            {% set dis = states('sensor.battery_discharge_power') %}
+            {% set chg = states('sensor.battery_charge_power') %}
+            {% if not ev %}not_charging
+            {% elif not is_number(dis) or not is_number(chg) %}battery_measurement_invalid
+            {% elif dis | float > 50 %}discharge_observed_above_50w
+            {% elif chg | float > 50 %}charge_observed_above_50w
+            {% else %}no_material_flow_observed{% endif %}
+          battery_warning_threshold_w: 50
+          battery_warning_note: diagnostic_threshold_not_a_physical_interlock
+          existing_gateway_a: "{{ states('sensor.ev600_gateway_selected_current') }}"
+          existing_gateway_source: "{{ states('sensor.ev600_gateway_selected_source') }}"
+
+  - sensor:
+      - name: Energy900 EV Fixed Shadow Comparison
+        unique_id: energy900_ev_fixed_shadow_comparison
+        icon: mdi:compare-horizontal
+        state: >-
+          {% set legacy = states('sensor.ev600_gateway_selected_current') %}
+          {% set candidate = states('sensor.energy900_ev_fixed_shadow_proposal') %}
+          {% if not is_number(legacy) or not is_number(candidate) %}invalid
+          {% elif (legacy | float - candidate | float) | abs <= 0.5 %}match
+          {% else %}different{% endif %}
+        attributes:
+          physical_write: false
+          candidate_a: "{{ states('sensor.energy900_ev_fixed_shadow_proposal') }}"
+          existing_gateway_a: "{{ states('sensor.ev600_gateway_selected_current') }}"
+          existing_gateway_source: "{{ states('sensor.ev600_gateway_selected_source') }}"
+          difference_a: >-
+            {% set legacy = states('sensor.ev600_gateway_selected_current') %}
+            {% set candidate = states('sensor.energy900_ev_fixed_shadow_proposal') %}
+            {{ (candidate | float - legacy | float) | round(1) if is_number(candidate) and is_number(legacy) else 'unknown' }}
