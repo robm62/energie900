@@ -1,0 +1,84 @@
+# Energy900 core v0.1.0-shadow
+# Read-only: no automations, scripts or physical service calls.
+# Zendure HEMS AUTO remains the physical battery controller.
+input_select:
+  energy900_contract_mode:
+    name: Energy900 contractmodus
+    options:
+      - Vast/variabel
+      - Dynamisch
+    icon: mdi:file-document-outline
+
+template:
+  - triggers:
+      - trigger: time_pattern
+        seconds: "/10"
+      - trigger: state
+        entity_id:
+          - input_select.energy900_contract_mode
+          - binary_sensor.energy700_battery_hems_active
+          - sensor.p1_meter_homewizard_vermogen
+          - sensor.p1_meter_spanning_fase_1
+          - sensor.p1_meter_stroom
+          - sensor.p1_meter_homewizard_energie_import
+          - sensor.p1_meter_homewizard_energie_export
+          - sensor.kwh_meter_productievermogen
+          - sensor.solarflow_2400_ac_rob_electric_level
+          - sensor.solarflow_2400_ac_rob_output_home_power
+          - sensor.solarflow_2400_ac_rob_grid_input_power
+          - sensor.solarflow_2400_ac_rob_solar_input_power
+          - sensor.euj3mext_status
+          - sensor.euj3mext_vermogen
+          - input_boolean.energy700_power_writer_enabled
+    sensor:
+      - name: Energy900 Core Shadow Status
+        unique_id: energy900_core_shadow_status
+        icon: mdi:eye-check-outline
+        state: >-
+          {% set p1 = states('sensor.p1_meter_homewizard_vermogen') %}
+          {% set soc = states('sensor.solarflow_2400_ac_rob_electric_level') %}
+          {% set pv = states('sensor.kwh_meter_productievermogen') %}
+          {% set ts = [
+            as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_spanning_fase_1.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_stroom.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_homewizard_energie_import.last_updated, 0),
+            as_timestamp(states.sensor.p1_meter_homewizard_energie_export.last_updated, 0)
+          ] | max %}
+          {% set age = as_timestamp(now()) - ts if ts > 0 else 999999 %}
+          {% if not is_state('binary_sensor.energy700_battery_hems_active', 'on') %}blocked_hems_not_active
+          {% elif is_state('input_boolean.energy700_power_writer_enabled', 'on') %}blocked_legacy_power_writer_enabled
+          {% elif not is_state('input_select.energy900_contract_mode', 'Vast/variabel') %}blocked_mode_not_fixed
+          {% elif not is_number(p1) %}blocked_p1_invalid
+          {% elif age < -5 or age > 30 %}blocked_p1_stale
+          {% elif not is_number(soc) or not (0 <= soc | float <= 100) %}blocked_soc_invalid
+          {% elif not is_number(pv) or pv | float < 0 %}blocked_pv_invalid
+          {% else %}observing_hems_auto{% endif %}
+        attributes:
+          version: v0.1.0-shadow
+          physical_write: false
+          battery_writer_authorized: false
+          easee_writer_authorized: false
+          selected_contract_mode: "{{ states('input_select.energy900_contract_mode') }}"
+          zendure_contract_setting: manual_in_zendure_app_not_readable_here
+          observed_hems_active: "{{ states('binary_sensor.energy700_battery_hems_active') }}"
+          requested_legacy_owner: "{{ states('input_select.energy700_battery_owner_requested') }}"
+          effective_legacy_owner: "{{ states('sensor.energy700_effective_battery_owner') }}"
+          legacy_power_writer_enabled: "{{ states('input_boolean.energy700_power_writer_enabled') }}"
+          p1_grid_w: "{{ states('sensor.p1_meter_homewizard_vermogen') }}"
+          p1_age_s: >-
+            {% set ts = [
+              as_timestamp(states.sensor.p1_meter_homewizard_vermogen.last_updated, 0),
+              as_timestamp(states.sensor.p1_meter_spanning_fase_1.last_updated, 0),
+              as_timestamp(states.sensor.p1_meter_stroom.last_updated, 0),
+              as_timestamp(states.sensor.p1_meter_homewizard_energie_import.last_updated, 0),
+              as_timestamp(states.sensor.p1_meter_homewizard_energie_export.last_updated, 0)
+            ] | max %}
+            {{ (as_timestamp(now()) - ts) | round(1) if ts > 0 else -1 }}
+          pv_homewizard_w: "{{ states('sensor.kwh_meter_productievermogen') }}"
+          battery_soc_pct: "{{ states('sensor.solarflow_2400_ac_rob_electric_level') }}"
+          battery_output_home_w: "{{ states('sensor.solarflow_2400_ac_rob_output_home_power') }}"
+          battery_grid_input_w: "{{ states('sensor.solarflow_2400_ac_rob_grid_input_power') }}"
+          battery_solar_input_w: "{{ states('sensor.solarflow_2400_ac_rob_solar_input_power') }}"
+          easee_status: "{{ states('sensor.euj3mext_status') }}"
+          easee_power_kw: "{{ states('sensor.euj3mext_vermogen') }}"
