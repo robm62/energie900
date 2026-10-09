@@ -45,5 +45,16 @@ Document gestart: 2026-10-09. Status: ontwerp en verificatie; geen automatische 
 - **Veiligheidsstatus:** alleen Git-documentatieaanmaak; geen HA-configuratie, writer, servicecall, productie, promotie of moduswijziging.
 - **Eerstvolgende actie:** read-only actuele HA-packages en writerpaden vergelijken met Git; daarna uitsluitend geverifieerde voortgang vastleggen.
 
+
+### 2026-10-09 — aanvullende read-only HA/Git-audit
+- **Git-baseline:** `main` bevat zeven Energy900 YAML-packages; de centrale documentatie bestaat sinds commit `e1835a3aaa690a439dddc9ac08f73f9144aa517b`.
+- **HA-bestandsinventaris:** 15 actieve `packages/9xx_energy900_*.yaml` bestanden: 900, 920, 921, 925, 926, 927, 930, 930a, 930b, 931, 932, 934, 934a, 935 en 936. Git mist ten opzichte van deze inventaris 921, 930, 931, 932, 934, 934a, 935 en 936. Dit is een bestandsinventaris, geen bewezen semantische diff voor elk bestand.
+- **Bevestigde HA-code:** `900` v0.2.0-standalone (read-only), `925` v0.1.4-soc-heartbeat-interlock (shadow), `930` v0.3.8-standalone-production-candidate (fysieke Easee-writer aanwezig), `930a` v0.2.0-standalone (shadow), `930b` v0.2.3-standalone (shadow-intent), `934` v0.3.2 (batterijguard met script voor Zendure-minimum-SOC). Aanwezigheid van een script betekent niet dat het tijdens deze audit is uitgevoerd.
+- **Runtime bewijs (read-only entity-state, 2026-10-09):** `input_select.energy900_ev_policy_mode=Vast`; `input_boolean.energy900_ev_core_commissioned=on`; `input_boolean.energy900_ev_legacy_routes_isolated=on`; `sensor.energy900_ev_writer_status=READY_MATCH`, `requested_a=0`, `physical_phase_match=off`. `input_select.energy900_contract_mode=Vast/variabel`. `sensor.energy900_core_shadow_status=observing_hems_auto_soc_timestamp_old`, `battery_soc_age_s=37361.4`, `physical_write=false`, `battery_writer_authorized=false`.
+- **Architectuur/migratiematrix:** HEMS ON eigen writer: niet bewezen; HEMS OFF eigen writer: niet bewezen; centrale batterijwriter-lock: niet bewezen. EV900 met fysieke writer: HA-code bevestigd, maar exclusiviteit over alle routes en volledige fysieke werking niet bewezen. HEMS Dynamic blijft géén apart batterijsysteem. Handmatige EV-moduskeuze bevestigd; geen automatische moduswisseling getest.
+- **Blokkades:** Git/HA-versiedrift; volledigheid van EV-writer-isolatie; SOC-timestamp; `physical_phase_match=off` bij idle; ontbrekend testbewijs voor batterijwriter-exclusiviteit.
+- **Veiligheidsstatus:** alleen HA-bestanden/states en Git-document gelezen. Geen servicecall, writeractie, HA-configuratie, promotie of omschakeling.
+- **Eerstvolgende actie:** read-only resterende 921/931/932/934a/935/936-code en fysieke writerpaden inspecteren, daarna compatibiliteit en testbewijs aanvullen. Geen productiepromotie.
+
 ## Protocol volgende dagcontroles
 Controleer Git en waar beschikbaar HA read-only. Leg datum, feitelijk gewijzigde bestanden, relevante commit-SHA, migratiematrix, testbewijs, blokkades, veiligheidsstatus en eerstvolgende actie vast. Update alleen dit bestaande document indien exacte locatie en schrijfrechten beschikbaar zijn. Label onbekende informatie als niet geverifieerd. Geen configuratiewijzigingen of automatische omschakeling.
